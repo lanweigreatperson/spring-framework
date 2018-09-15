@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2018 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ final class DefaultSslInfo implements SslInfo {
 	private final X509Certificate[] peerCertificates;
 
 
-	DefaultSslInfo(String sessionId, X509Certificate[] peerCertificates) {
+	DefaultSslInfo(@Nullable String sessionId, X509Certificate[] peerCertificates) {
 		Assert.notNull(peerCertificates, "No SSL certificates");
 		this.sessionId = sessionId;
 		this.peerCertificates = peerCertificates;
@@ -103,7 +103,7 @@ final class DefaultSslInfo implements SslInfo {
 				result.add((X509Certificate) certificate);
 			}
 		}
-		return !result.isEmpty() ? result.toArray(new X509Certificate[result.size()]) : null;
+		return (!result.isEmpty() ? result.toArray(new X509Certificate[0]) : null);
 	}
 
 }

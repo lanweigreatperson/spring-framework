@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2018 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ import org.springframework.util.MimeType;
 import org.springframework.util.MimeTypeUtils;
 
 /**
- * Decoder for {@link Resource}s.
+ * Decoder for {@link Resource Resources}.
  *
  * @author Arjen Poutsma
  * @author Rossen Stoyanchev
@@ -51,9 +51,7 @@ public class ResourceDecoder extends AbstractDataBufferDecoder<Resource> {
 	@Override
 	public boolean canDecode(ResolvableType elementType, @Nullable MimeType mimeType) {
 		Class<?> clazz = elementType.getRawClass();
-		return (clazz != null &&
-				(InputStreamResource.class == clazz || clazz.isAssignableFrom(ByteArrayResource.class)) &&
-				super.canDecode(elementType, mimeType));
+		return clazz != null && Resource.class.isAssignableFrom(clazz) && super.canDecode(elementType, mimeType);
 	}
 
 	@Override
@@ -74,10 +72,14 @@ public class ResourceDecoder extends AbstractDataBufferDecoder<Resource> {
 		Class<?> clazz = elementType.getRawClass();
 		Assert.state(clazz != null, "No resource class");
 
+		if (logger.isDebugEnabled()) {
+			logger.debug(Hints.getLogPrefix(hints) + "Read " + bytes.length + " bytes");
+		}
+
 		if (InputStreamResource.class == clazz) {
 			return new InputStreamResource(new ByteArrayInputStream(bytes));
 		}
-		else if (clazz.isAssignableFrom(ByteArrayResource.class)) {
+		else if (Resource.class.isAssignableFrom(clazz)) {
 			return new ByteArrayResource(bytes);
 		}
 		else {

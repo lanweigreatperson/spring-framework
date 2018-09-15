@@ -195,9 +195,6 @@ execution.
 
 The `TransactionDefinition` interface specifies:
 
-* __Isolation__: The degree to which this transaction is isolated from the work of other
-  transactions. For example, can this transaction see uncommitted writes from other
-  transactions?
 * __Propagation__: Typically, all code executed within a transaction scope will run in
   that transaction. However, you have the option of specifying the behavior in the event
   that a transactional method is executed when a transaction context already exists. For
@@ -205,6 +202,9 @@ The `TransactionDefinition` interface specifies:
   the existing transaction can be suspended and a new transaction created. __Spring
   offers all of the transaction propagation options familiar from EJB CMT__. To read
   about the semantics of transaction propagation in Spring, see <<tx-propagation>>.
+* __Isolation__: The degree to which this transaction is isolated from the work of other
+  transactions. For example, can this transaction see uncommitted writes from other
+  transactions?
 * __Timeout__: How long this transaction runs before timing out and being rolled back
   automatically by the underlying transaction infrastructure.
 * __Read-only status__: A read-only transaction can be used when your code reads but
@@ -311,8 +311,8 @@ The above definition of the `dataSource` bean uses the `<jndi-lookup/>` tag from
 ====
 
 You can also use Hibernate local transactions easily, as shown in the following
-examples. In this case, you need to define a Hibernate `LocalSessionFactoryBean`, which
-your application code will use to obtain Hibernate `Session` instances.
+examples. In this case, you need to define a Hibernate `LocalSessionFactoryBean`,
+which your application code will use to obtain Hibernate `Session` instances.
 
 The `DataSource` bean definition will be similar to the local JDBC example shown
 previously and thus is not shown in the following example.
@@ -830,7 +830,7 @@ unhandled `InstrumentNotFoundException`.
 	</tx:advice>
 ----
 
-When the Spring Framework's transaction infrastructure catches an exception and is
+When the Spring Framework's transaction infrastructure catches an exception and it
 consults configured rollback rules to determine whether to mark the transaction for
 rollback, the __strongest__ matching rule wins. So in the case of the following
 configuration, any exception other than an `InstrumentNotFoundException` results in a
@@ -1021,17 +1021,17 @@ that are nested within `<tx:advice/>` and `<tx:attributes/>` tags are summarized
 | `isolation`
 | No
 | DEFAULT
-| Transaction isolation level.
+| Transaction isolation level. Only applicable to propagation REQUIRED or REQUIRES_NEW.
 
 | `timeout`
 | No
 | -1
-| Transaction timeout value (in seconds).
+| Transaction timeout (seconds). Only applicable to propagation REQUIRED or REQUIRES_NEW.
 
 | `read-only`
 | No
 | false
-| Is this transaction read-only?
+| Read/write vs. read-only transaction. Only applicable to REQUIRED or REQUIRES_NEW.
 
 | `rollback-for`
 | No
@@ -1155,7 +1155,6 @@ transactional behavior.
 
 [TIP]
 ====
-
 Spring recommends that you only annotate concrete classes (and methods of concrete
 classes) with the `@Transactional` annotation, as opposed to annotating interfaces. You
 certainly can place the `@Transactional` annotation on an interface (or an interface
@@ -1301,7 +1300,7 @@ annotation are summarized in the following table:
 
 | <<tx-multiple-tx-mgrs-with-attransactional,value>>
 | String
-|  Optional qualifier specifying the transaction manager to be used.
+| Optional qualifier specifying the transaction manager to be used.
 
 | <<tx-propagation,propagation>>
 | enum: `Propagation`
@@ -1309,15 +1308,15 @@ annotation are summarized in the following table:
 
 | `isolation`
 | enum: `Isolation`
-| Optional isolation level.
-
-| `readOnly`
-| boolean
-| Read/write vs. read-only transaction
+| Optional isolation level. Only applicable to propagation REQUIRED or REQUIRES_NEW.
 
 | `timeout`
 | int (in seconds granularity)
-| Transaction timeout.
+| Optional transaction timeout. Only applicable to propagation REQUIRED or REQUIRES_NEW.
+
+| `readOnly`
+| boolean
+| Read/write vs. read-only transaction. Only applicable to REQUIRED or REQUIRES_NEW.
 
 | `rollbackFor`
 | Array of `Class` objects, which must be derived from `Throwable.`
@@ -1451,11 +1450,28 @@ image::images/tx_prop_required.png[]
 
 PROPAGATION_REQUIRED
 
+`PROPAGATION_REQUIRED` enforces a physical transaction: either locally for the current
+scope if no transaction exists yet, or participating in an existing 'outer' transaction
+defined for a larger scope. This is a fine default in common call stack arrangements
+within the same thread, e.g. a service facade delegating to several repository methods
+where all the underlying resources have to participate in the service-level transaction.
+
+[NOTE]
+====
+By default, a participating transaction will join the characteristics of the outer scope,
+silently ignoring the local isolation level, timeout value or read-only flag (if any).
+Consider switching the "validateExistingTransactions" flag to "true" on your transaction
+manager if you'd like isolation level declarations to get rejected when participating in
+an existing transaction with a different isolation level. This non-lenient mode will also
+reject read-only mismatches, i.e. an inner read-write transaction trying to participate
+in a read-only outer scope.
+====
+
 When the propagation setting is `PROPAGATION_REQUIRED`, a __logical__ transaction scope
 is created for each method upon which the setting is applied. Each such logical
 transaction scope can determine rollback-only status individually, with an outer
-transaction scope being logically independent from the inner transaction scope. Of
-course, in case of standard `PROPAGATION_REQUIRED` behavior, all these scopes will be
+transaction scope being logically independent from the inner transaction scope.
+Of course, in case of standard `PROPAGATION_REQUIRED` behavior, all these scopes will be
 mapped to the same physical transaction. So a rollback-only marker set in the inner
 transaction scope does affect the outer transaction's chance to actually commit (as you
 would expect it to).
@@ -1477,11 +1493,14 @@ image::images/tx_prop_requires_new.png[]
 
 PROPAGATION_REQUIRES_NEW
 
-`PROPAGATION_REQUIRES_NEW`, in contrast to `PROPAGATION_REQUIRED`, uses a __completely__
-independent transaction for each affected transaction scope. In that case, the
-underlying physical transactions are different and hence can commit or roll back
+`PROPAGATION_REQUIRES_NEW`, in contrast to `PROPAGATION_REQUIRED`, always uses an
+__independent__ physical transaction for each affected transaction scope, never
+participating in an existing transaction for an outer scope. In such an arrangement,
+the underlying resource transactions are different and hence can commit or roll back
 independently, with an outer transaction not affected by an inner transaction's rollback
-status.
+status, and with an inner transaction's locks released immediately after its completion.
+Such an independent inner transaction may also declare its own isolation level, timeout
+and read-only settings, never inheriting an outer transaction's characteristics.
 
 [[tx-propagation-nested]]
 ===== Nested
@@ -1558,7 +1577,7 @@ is controlled through the `Ordered` interface. For full details on advice orderi
 ----
 
 [source,xml,indent=0]
-[subs="verbatim,quotes"]
+[subs="verbatim"]
 ----
 	<?xml version="1.0" encoding="UTF-8"?>
 	<beans xmlns="http://www.springframework.org/schema/beans"
@@ -1578,10 +1597,10 @@ is controlled through the `Ordered` interface. For full details on advice orderi
 		<!-- this is the aspect -->
 		<bean id="profiler" class="x.y.SimpleProfiler">
 			<!-- execute before the transactional advice (hence the lower order number) -->
-			<property name="order" __value="1"__/>
+			<property name="order" value="1"/>
 		</bean>
 
-		<tx:annotation-driven transaction-manager="txManager" __order="200"__/>
+		<tx:annotation-driven transaction-manager="txManager" order="200"/>
 
 		<aop:config>
 				<!-- this advice will execute around the transactional advice -->
@@ -1614,7 +1633,7 @@ The following example effects the same setup as above, but uses the purely XML
 declarative approach.
 
 [source,xml,indent=0]
-[subs="verbatim,quotes"]
+[subs="verbatim"]
 ----
 	<?xml version="1.0" encoding="UTF-8"?>
 	<beans xmlns="http://www.springframework.org/schema/beans"
@@ -1634,14 +1653,14 @@ declarative approach.
 		<!-- the profiling advice -->
 		<bean id="profiler" class="x.y.SimpleProfiler">
 			<!-- execute before the transactional advice (hence the lower order number) -->
-			__<property name="order" value="1__"/>
+			<property name="order" value="1"/>
 		</bean>
 
 		<aop:config>
 			<aop:pointcut id="entryPointMethod" expression="execution(* x.y..*Service.*(..))"/>
 			<!-- will execute after the profiling advice (c.f. the order attribute) -->
 
-			<aop:advisor advice-ref="txAdvice" pointcut-ref="entryPointMethod" __order="2__"/>
+			<aop:advisor advice-ref="txAdvice" pointcut-ref="entryPointMethod" order="2"/>
 			<!-- order value is higher than the profiling aspect -->
 
 			<aop:aspect id="profilingAspect" ref="profiler">
@@ -1714,7 +1733,7 @@ follows Java's rule that annotations on interfaces are __not inherited__.
 ====
 
 The `@Transactional` annotation on a class specifies the default transaction semantics
-for the execution of any method in the class.
+for the execution of any public method in the class.
 
 The `@Transactional` annotation on a method within the class overrides the default
 transaction semantics given by the class annotation (if present). Any method may be
@@ -1775,7 +1794,6 @@ a transaction. You then pass an instance of your custom `TransactionCallback` to
 
 		// use constructor-injection to supply the PlatformTransactionManager
 		public SimpleService(PlatformTransactionManager transactionManager) {
-			Assert.notNull(transactionManager, "The 'transactionManager' argument must not be null.");
 			this.transactionTemplate = new TransactionTemplate(transactionManager);
 		}
 
@@ -1817,7 +1835,7 @@ Code within the callback can roll the transaction back by calling the
 			try {
 				updateOperation1();
 				updateOperation2();
-			} catch (SomeBusinessExeption ex) {
+			} catch (SomeBusinessException ex) {
 				**status.setRollbackOnly();**
 			}
 		}
@@ -1842,7 +1860,6 @@ a specific `TransactionTemplate:`
 		private final TransactionTemplate transactionTemplate;
 
 		public SimpleService(PlatformTransactionManager transactionManager) {
-			Assert.notNull(transactionManager, "The 'transactionManager' argument must not be null.");
 			this.transactionTemplate = new TransactionTemplate(transactionManager);
 
 			// the transaction settings can be set here explicitly if so desired
@@ -1936,9 +1953,9 @@ Registering a regular event listener is done via the `@EventListener` annotation
 to bind it to the transaction use `@TransactionalEventListener`. When you do so, the listener
 will be bound to the commit phase of the transaction by default.
 
-Let's take an example to illustrate this concept. Assume that a component publish an order
+Let's take an example to illustrate this concept. Assume that a component publishes an order
 created event and we want to define a listener that should only handle that event once the
-transaction in which it has been published as committed successfully:
+transaction in which it has been published has committed successfully:
 
 [source,java,indent=0]
 [subs="verbatim,quotes"]
@@ -1953,8 +1970,8 @@ transaction in which it has been published as committed successfully:
 	}
 ----
 
-The `TransactionalEventListener` annotation exposes a `phase` attribute  that allows to customize
-to which phase of the transaction the listener should be bound to. The valid phases are `BEFORE_COMMIT`,
+The `TransactionalEventListener` annotation exposes a `phase` attribute  that allows us to customize
+which phase of the transaction the listener should be bound to. The valid phases are `BEFORE_COMMIT`,
 `AFTER_COMMIT` (default), `AFTER_ROLLBACK` and `AFTER_COMPLETION` that aggregates the transaction
 completion (be it a commit or a rollback).
 
@@ -2197,7 +2214,7 @@ configure the application context to take advantage of these annotations.
 
 
 [[jdbc-introduction]]
-=== Introduction to Spring Framework JDBC
+=== Introduction to Spring Framework's JDBC support
 
 The value-add provided by the Spring Framework JDBC abstraction is perhaps best shown by
 the sequence of actions outlined in the table below. The table shows what actions Spring
@@ -2925,10 +2942,10 @@ query methods, one for an `int` and one that queries for a `String`.
 ----
 
 In addition to the single result query methods, several methods return a list with an
-entry for each row that the query returned. The most generic method is
-`queryForList(..)` which returns a `List` where each entry is a `Map` with each entry in
-the map representing the column value for that row. If you add a method to the above
-example to retrieve a list of all the rows, it would look like this:
+entry for each row that the query returned. The most generic method is `queryForList(..)`
+which returns a `List` where each element is a `Map` containing one entry for each column,
+using the column name as the key. If you add a method to the above example to retrieve a
+list of all the rows, it would look like this:
 
 [source,java,indent=0]
 [subs="verbatim,quotes"]
@@ -2965,7 +2982,6 @@ in the primitive wrapper classes explicitly or using auto-boxing.
 [subs="verbatim,quotes"]
 ----
 	import javax.sql.DataSource;
-
 	import org.springframework.jdbc.core.JdbcTemplate;
 
 	public class ExecuteAnUpdate {
@@ -3810,7 +3826,7 @@ like:
 [subs="verbatim,quotes"]
 ----
 	new SqlParameter("in_id", Types.NUMERIC),
-		new SqlOutParameter("out_first_name", Types.VARCHAR),
+	new SqlOutParameter("out_first_name", Types.VARCHAR),
 ----
 
 The first line with the `SqlParameter` declares an IN parameter. IN parameters can be
@@ -4006,7 +4022,7 @@ data from the `t_actor` relation to an instance of the `Actor` class.
 
 		public ActorMappingQuery(DataSource ds) {
 			super(ds, "select id, first_name, last_name from t_actor where id = ?");
-			super.declareParameter(new SqlParameter("id", Types.INTEGER));
+			declareParameter(new SqlParameter("id", Types.INTEGER));
 			compile();
 		}
 
@@ -4027,7 +4043,7 @@ for this customer query takes the `DataSource` as the only parameter. In this
 constructor you call the constructor on the superclass with the `DataSource` and the SQL
 that should be executed to retrieve the rows for this query. This SQL will be used to
 create a `PreparedStatement` so it may contain place holders for any parameters to be
-passed in during execution.You must declare each parameter using the `declareParameter`
+passed in during execution. You must declare each parameter using the `declareParameter`
 method passing in an `SqlParameter`. The `SqlParameter` takes a name and the JDBC type
 as defined in `java.sql.Types`. After you define all parameters, you call the
 `compile()` method so the statement can be prepared and later executed. This class is
@@ -4080,9 +4096,7 @@ class since it can easily be parameterized by setting SQL and declaring paramete
 [subs="verbatim"]
 ----
 	import java.sql.Types;
-
 	import javax.sql.DataSource;
-
 	import org.springframework.jdbc.core.SqlParameter;
 	import org.springframework.jdbc.object.SqlUpdate;
 
@@ -4127,7 +4141,7 @@ constants.
 [subs="verbatim,quotes"]
 ----
 	new SqlParameter("in_id", Types.NUMERIC),
-		new SqlOutParameter("out_first_name", Types.VARCHAR),
+	new SqlOutParameter("out_first_name", Types.VARCHAR),
 ----
 
 The first line with the `SqlParameter` declares an IN parameter. IN parameters can be
@@ -4135,10 +4149,10 @@ used for both stored procedure calls and for queries using the `SqlQuery` and it
 subclasses covered in the following section.
 
 The second line with the `SqlOutParameter` declares an `out` parameter to be used in the
-stored procedure call. There is also an `SqlInOutParameter` for `I` `nOut` parameters,
+stored procedure call. There is also an `SqlInOutParameter` for `InOut` parameters,
 parameters that provide an `in` value to the procedure and that also return a value.
 
-For `i` `n` parameters, in addition to the name and the SQL type, you can specify a
+For `in` parameters, in addition to the name and the SQL type, you can specify a
 scale for numeric data or a type name for custom database types. For `out` parameters
 you can provide a `RowMapper` to handle mapping of rows returned from a REF cursor.
 Another option is to specify an `SqlReturnType` that enables you to define customized
@@ -4161,9 +4175,7 @@ output parameter, in this case only one, using the parameter name as the key.
 	import java.util.Date;
 	import java.util.HashMap;
 	import java.util.Map;
-
 	import javax.sql.DataSource;
-
 	import org.springframework.beans.factory.annotation.Autowired;
 	import org.springframework.jdbc.core.SqlOutParameter;
 	import org.springframework.jdbc.object.StoredProcedure;
@@ -4210,13 +4222,12 @@ Oracle REF cursors).
 [source,java,indent=0]
 [subs="verbatim,quotes"]
 ----
+	import java.util.HashMap;
+	import java.util.Map;
+	import javax.sql.DataSource;
 	import oracle.jdbc.OracleTypes;
 	import org.springframework.jdbc.core.SqlOutParameter;
 	import org.springframework.jdbc.object.StoredProcedure;
-
-	import javax.sql.DataSource;
-	import java.util.HashMap;
-	import java.util.Map;
 
 	public class TitlesAndGenresStoredProcedure extends StoredProcedure {
 
@@ -4247,12 +4258,10 @@ the supplied `ResultSet`:
 [source,java,indent=0]
 [subs="verbatim,quotes"]
 ----
-	import org.springframework.jdbc.core.RowMapper;
-
 	import java.sql.ResultSet;
 	import java.sql.SQLException;
-
 	import com.foo.domain.Title;
+	import org.springframework.jdbc.core.RowMapper;
 
 	public final class TitleMapper implements RowMapper<Title> {
 
@@ -4271,12 +4280,10 @@ the supplied `ResultSet`.
 [source,java,indent=0]
 [subs="verbatim,quotes"]
 ----
-	import org.springframework.jdbc.core.RowMapper;
-
 	import java.sql.ResultSet;
 	import java.sql.SQLException;
-
 	import com.foo.domain.Genre;
+	import org.springframework.jdbc.core.RowMapper;
 
 	public final class GenreMapper implements RowMapper<Genre> {
 
@@ -4288,23 +4295,20 @@ the supplied `ResultSet`.
 
 To pass parameters to a stored procedure that has one or more input parameters in its
 definition in the RDBMS, you can code a strongly typed `execute(..)` method that would
-delegate to the superclass' untyped `execute(Map parameters)` method (which has
-`protected` access); for example:
+delegate to the untyped `execute(Map)` method in the superclass; for example:
 
 [source,java,indent=0]
 [subs="verbatim,quotes"]
 ----
-	import oracle.jdbc.OracleTypes;
-	import org.springframework.jdbc.core.SqlOutParameter;
-	import org.springframework.jdbc.core.SqlParameter;
-	import org.springframework.jdbc.object.StoredProcedure;
-
-	import javax.sql.DataSource;
-
 	import java.sql.Types;
 	import java.util.Date;
 	import java.util.HashMap;
 	import java.util.Map;
+	import javax.sql.DataSource;
+	import oracle.jdbc.OracleTypes;
+	import org.springframework.jdbc.core.SqlOutParameter;
+	import org.springframework.jdbc.core.SqlParameter;
+	import org.springframework.jdbc.object.StoredProcedure;
 
 	public class TitlesAfterDateStoredProcedure extends StoredProcedure {
 
@@ -4332,7 +4336,7 @@ delegate to the superclass' untyped `execute(Map parameters)` method (which has
 === Common problems with parameter and data value handling
 
 Common problems with parameters and data values exist in the different approaches
-provided by the Spring Framework JDBC.
+provided by Spring Framework's JDBC support.
 
 
 [[jdbc-type-information]]
@@ -4399,16 +4403,18 @@ dependency injection.
 	final File clobIn = new File("large.txt");
 	final InputStream clobIs = new FileInputStream(clobIn);
 	final InputStreamReader clobReader = new InputStreamReader(clobIs);
+
 	jdbcTemplate.execute(
 		"INSERT INTO lob_table (id, a_clob, a_blob) VALUES (?, ?, ?)",
-		new AbstractLobCreatingPreparedStatementCallback(lobHandler) { # <1>
+		new AbstractLobCreatingPreparedStatementCallback(lobHandler) {  # <1>
 			protected void setValues(PreparedStatement ps, LobCreator lobCreator) throws SQLException {
 				ps.setLong(1, 1L);
-				lobCreator.setClobAsCharacterStream(ps, 2, clobReader, (int)clobIn.length()); # <2>
-				lobCreator.setBlobAsBinaryStream(ps, 3, blobIs, (int)blobIn.length()); # <3>
+				lobCreator.setClobAsCharacterStream(ps, 2, clobReader, (int)clobIn.length());  # <2>
+				lobCreator.setBlobAsBinaryStream(ps, 3, blobIs, (int)blobIn.length());  # <3>
 			}
 		}
 	);
+
 	blobIs.close();
 	clobReader.close();
 ----
@@ -4442,9 +4448,13 @@ with the same instance variable `lobHandler` and a reference to a `DefaultLobHan
 		new RowMapper<Map<String, Object>>() {
 			public Map<String, Object> mapRow(ResultSet rs, int i) throws SQLException {
 				Map<String, Object> results = new HashMap<String, Object>();
-				String clobText = lobHandler.getClobAsString(rs, "a_clob"); # <1>
-	results.put("CLOB", clobText); byte[] blobBytes = lobHandler.getBlobAsBytes(rs, "a_blob"); # <2>
-	results.put("BLOB", blobBytes); return results; } });
+				String clobText = lobHandler.getClobAsString(rs, "a_clob");  # <1>
+				results.put("CLOB", clobText);
+				byte[] blobBytes = lobHandler.getBlobAsBytes(rs, "a_blob");  # <2>
+				results.put("BLOB", blobBytes);
+				return results;
+			}
+		});
 ----
 
 <1> Using the method `getClobAsString`, retrieve the contents of the CLOB.
@@ -4495,21 +4505,24 @@ declaration of an `SqlOutParameter`.
 [source,java,indent=0]
 [subs="verbatim,quotes"]
 ----
-	final TestItem = new TestItem(123L, "A test item",
-			new SimpleDateFormat("yyyy-M-d").parse("2010-12-31"));
+	public class TestItemStoredProcedure extends StoredProcedure {
 
-	declareParameter(new SqlOutParameter("item", OracleTypes.STRUCT, "ITEM_TYPE",
-		new SqlReturnType() {
-			public Object getTypeValue(CallableStatement cs, int colIndx, int sqlType, String typeName) throws SQLException {
-				STRUCT struct = (STRUCT) cs.getObject(colIndx);
-				Object[] attr = struct.getAttributes();
-				TestItem item = new TestItem();
-				item.setId(((Number) attr[0]).longValue());
-				item.setDescription((String) attr[1]);
-				item.setExpirationDate((java.util.Date) attr[2]);
-				return item;
-			}
-		}));
+		public TestItemStoredProcedure(DataSource dataSource) {
+			...
+			declareParameter(new SqlOutParameter("item", OracleTypes.STRUCT, "ITEM_TYPE",
+				new SqlReturnType() {
+					public Object getTypeValue(CallableStatement cs, int colIndx, int sqlType, String typeName) throws SQLException {
+						STRUCT struct = (STRUCT) cs.getObject(colIndx);
+						Object[] attr = struct.getAttributes();
+						TestItem item = new TestItem();
+						item.setId(((Number) attr[0]).longValue());
+						item.setDescription((String) attr[1]);
+						item.setExpirationDate((java.util.Date) attr[2]);
+						return item;
+					}
+				}));
+			...
+		}
 ----
 
 You use the `SqlTypeValue` to pass in the value of a Java object like `TestItem` into a
@@ -4521,7 +4534,7 @@ the following example, or ``ArrayDescriptor``s.
 [source,java,indent=0]
 [subs="verbatim,quotes"]
 ----
-	final TestItem = new TestItem(123L, "A test item",
+	final TestItem testItem = new TestItem(123L, "A test item",
 			new SimpleDateFormat("yyyy-M-d").parse("2010-12-31"));
 
 	SqlTypeValue value = new AbstractSqlTypeValue() {
@@ -5103,8 +5116,8 @@ chapter will then cover the other ORM technologies, showing briefer examples the
 ====
 As of Spring Framework 5.0, Spring requires Hibernate ORM 4.3 or later for JPA support
 and even Hibernate ORM 5.0+ for programming against the native Hibernate Session API.
-Note that the Hibernate team does not maintain any versions prior to 5.0 anymore and
-is likely to focus on 5.2+ exclusively soon.
+Note that the Hibernate team does not maintain any versions prior to 5.1 anymore and
+is likely to focus on 5.3+ exclusively soon.
 ====
 
 
@@ -5162,8 +5175,25 @@ configuration:
 ----
 
 You can also access a JNDI-located `SessionFactory`, using Spring's
-`JndiObjectFactoryBean` / `<jee:jndi-lookup>` to retrieve and expose it. However, that
-is typically not common outside of an EJB context.
+`JndiObjectFactoryBean` / `<jee:jndi-lookup>` to retrieve and expose it.
+However, that is typically not common outside of an EJB context.
+
+[NOTE]
+====
+Spring also provides a `LocalSessionFactoryBuilder` variant, seamlessly integrating
+with `@Bean` style configuration and programmatic setup (no `FactoryBean` involved).
+
+Both `LocalSessionFactoryBean` and `LocalSessionFactoryBuilder` support background
+bootstrapping, with Hibernate initialization running in parallel to the application
+bootstrap thread on a given bootstrap executor (e.g. a `SimpleAsyncTaskExecutor`).
+On `LocalSessionFactoryBean`, this is available through the "bootstrapExecutor"
+property; on the programmatic `LocalSessionFactoryBuilder`, there is an overloaded
+`buildSessionFactory` method which takes a bootstrap executor argument.
+
+As of Spring Framework 5.1, such a native Hibernate setup can also expose a JPA
+`EntityManagerFactory` for standard JPA interaction next to native Hibernate access.
+See <<orm-jpa-hibernate,Native Hibernate setup for JPA>> for details.
+====
 
 
 [[orm-hibernate-straight]]
@@ -5636,6 +5666,12 @@ application uses to refer to them, for example, in `@PersistenceUnit` and
 Use this option for full JPA capabilities in a Spring-based application environment.
 This includes web containers such as Tomcat as well as stand-alone applications and
 integration tests with sophisticated persistence requirements.
+
+If you'd like to specifically configure a Hibernate setup, an immediate alternative is
+to go with Hibernate 5.2/5.3 and set up a native Hibernate `LocalSessionFactoryBean`
+instead of a plain JPA `LocalContainerEntityManagerFactoryBean`, letting it interact
+with JPA access code as well as native Hibernate access code.
+See <<orm-jpa-hibernate,Native Hibernate setup for JPA interaction>> for details.
 ====
 
 The `LocalContainerEntityManagerFactoryBean` gives full control over
@@ -5762,7 +5798,7 @@ This is important especially when the hosting applications rely on different JPA
 implementations because the JPA transformers are applied only at class loader level and
 thus are isolated from each other.
 
-[[orm-jpa-multiple]]
+[[orm-jpa-setup-multiple]]
 ===== Dealing with multiple persistence units
 
 For applications that rely on multiple persistence units locations, stored in various
@@ -5805,6 +5841,30 @@ affect __all__ hosted units, or programmatically, through the
 `PersistenceUnitPostProcessor`, which allows persistence unit selection. If no
 `PersistenceUnitManager` is specified, one is created and used internally by
 `LocalContainerEntityManagerFactoryBean`.
+
+[[orm-jpa-setup-background]]
+===== Background bootstrapping
+
+`LocalContainerEntityManagerFactoryBean` supports background bootstrapping through
+the `bootstrapExecutor` property:
+
+[source,xml,indent=0]
+[subs="verbatim,quotes"]
+----
+	<bean id="emf" class="org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean">
+		<property name="bootstrapExecutor">
+			<bean class="org.springframework.core.task.SimpleAsyncTaskExecutor"/>
+		</property>
+	</bean>
+----
+
+The actual JPA provider bootstrapping will be handed off to the specified executor then,
+running in parallel to the application bootstrap thread. The exposed `EntityManagerFactory`
+proxy can be injected into other application components and is even able to respond
+`EntityManagerFactoryInfo` configuration inspection. However, once the actual JPA provider
+is being accessed by other components, e.g. calling `createEntityManager`, those calls
+will block until the background bootstrapping has completed. In particular, when using
+Spring Data JPA, make sure to set up deferred bootstrapping for its repositories as well.
 
 
 [[orm-jpa-dao]]
@@ -5966,6 +6026,15 @@ to JDBC access code that accesses the same `DataSource`, provided that the regis
 Spring provides dialects for the EclipseLink and Hibernate JPA implementations.
 See the next section for details on the `JpaDialect` mechanism.
 
+[NOTE]
+====
+As an immediate alternative, Spring's native `HibernateTransactionManager` is capable
+of interacting with JPA access code as of Spring Framework 5.1 and Hibernate 5.2/5.3,
+adapting to several Hibernate specifics and providing JDBC interaction out of the box.
+This makes particular sense in combination with `LocalSessionFactoryBean` setup.
+See <<orm-jpa-hibernate,Native Hibernate setup for JPA interaction>> for details.
+====
+
 
 [[orm-jpa-dialect]]
 ==== JpaDialect and JpaVendorAdapter
@@ -6033,6 +6102,42 @@ server itself, i.e. via a JNDI lookup instead of a locally declared
 `LocalContainerEntityManagerFactoryBean`. A server-provided `EntityManagerFactory`
 might require special definitions in your server configuration, making the deployment
 less portable, but will be set up for the server's JTA environment out of the box.
+
+
+[[orm-jpa-hibernate]]
+==== Native Hibernate setup and native Hibernate transactions for JPA interaction
+
+As of Spring Framework 5.1 and Hibernate 5.2/5.3, a native `LocalSessionFactoryBean`
+setup in combination with `HibernateTransactionManager` allows for interaction with
+`@PersistenceContext` and other JPA access code out of the box. A Hibernate
+`SessionFactory` natively implements JPA's `EntityManagerFactory` interface now,
+and a Hibernate `Session` handle natively is a JPA `EntityManager` as well.
+Spring's JPA support facilities automatically detect native Hibernate Sessions.
+
+Such native Hibernate setup can therefore serve as a replacement for a standard JPA
+`LocalContainerEntityManagerFactoryBean` and `JpaTransactionManager` combination
+in many scenarios, allowing for interaction with `SessionFactory.getCurrentSession()`
+(and also `HibernateTemplate`) next to `@PersistenceContext EntityManager` within
+the same local transaction. Such a setup also provides stronger Hibernate integration
+and more configuration flexibility, not being constrained by JPA bootstrap contracts.
+
+There is no need for `HibernateJpaVendorAdapter` configuration in such a scenario
+since Spring's native Hibernate setup provides even more features out of the box:
+e.g. custom Hibernate Integrator setup, Hibernate 5.3 bean container integration,
+as well as stronger optimizations for read-only transactions. Last but not least,
+native Hibernate setup can also be expressed through `LocalSessionFactoryBuilder`,
+seamlessly integrating with `@Bean` style configuration (no `FactoryBean` involved).
+
+[NOTE]
+====
+`LocalSessionFactoryBean` and `LocalSessionFactoryBuilder` support background
+bootstrapping, just like the JPA `LocalContainerEntityManagerFactoryBean`.
+See <<orm-jpa-setup-background,Background bootstrapping>> for an introduction.
+
+On `LocalSessionFactoryBean`, this is available through the "bootstrapExecutor"
+property; on the programmatic `LocalSessionFactoryBuilder`, there is an overloaded
+`buildSessionFactory` method which takes a bootstrap executor argument.
+====
 
 
 
@@ -6240,7 +6345,6 @@ constructs a Spring application context, and calls these two methods.
 	import java.io.IOException;
 	import javax.xml.transform.stream.StreamResult;
 	import javax.xml.transform.stream.StreamSource;
-
 	import org.springframework.context.ApplicationContext;
 	import org.springframework.context.support.ClassPathXmlApplicationContext;
 	import org.springframework.oxm.Marshaller;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2018 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.util.function.IntPredicate;
 import javax.net.ssl.SSLSession;
@@ -35,6 +36,7 @@ import reactor.core.publisher.Flux;
 
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.core.io.buffer.PooledDataBuffer;
 import org.springframework.http.HttpCookie;
 import org.springframework.http.HttpHeaders;
@@ -42,6 +44,7 @@ import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 
 /**
@@ -58,19 +61,21 @@ class UndertowServerHttpRequest extends AbstractServerHttpRequest {
 	private final RequestBodyPublisher body;
 
 
-	public UndertowServerHttpRequest(HttpServerExchange exchange, DataBufferFactory bufferFactory) {
+	public UndertowServerHttpRequest(HttpServerExchange exchange, DataBufferFactory bufferFactory)
+			throws URISyntaxException {
+
 		super(initUri(exchange), "", initHeaders(exchange));
 		this.exchange = exchange;
 		this.body = new RequestBodyPublisher(exchange, bufferFactory);
 		this.body.registerListeners(exchange);
 	}
 
-	private static URI initUri(HttpServerExchange exchange) {
+	private static URI initUri(HttpServerExchange exchange) throws URISyntaxException {
 		Assert.notNull(exchange, "HttpServerExchange is required.");
 		String requestURL = exchange.getRequestURL();
 		String query = exchange.getQueryString();
 		String requestUriAndQuery = StringUtils.isEmpty(query) ? requestURL : requestURL + "?" + query;
-		return URI.create(requestUriAndQuery);
+		return new URI(requestUriAndQuery);
 	}
 
 	private static HttpHeaders initHeaders(HttpServerExchange exchange) {
@@ -123,8 +128,13 @@ class UndertowServerHttpRequest extends AbstractServerHttpRequest {
 		return (T) this.exchange;
 	}
 
+	@Override
+	protected String initId() {
+		return ObjectUtils.getIdentityHexString(this.exchange.getConnection());
+	}
 
-	private static class RequestBodyPublisher extends AbstractListenerReadPublisher<DataBuffer> {
+
+	private class RequestBodyPublisher extends AbstractListenerReadPublisher<DataBuffer> {
 
 		private final StreamSourceChannel channel;
 
@@ -132,7 +142,9 @@ class UndertowServerHttpRequest extends AbstractServerHttpRequest {
 
 		private final ByteBufferPool byteBufferPool;
 
+
 		public RequestBodyPublisher(HttpServerExchange exchange, DataBufferFactory bufferFactory) {
+			super(UndertowServerHttpRequest.this.getLogPrefix());
 			this.channel = exchange.getRequestChannel();
 			this.bufferFactory = bufferFactory;
 			this.byteBufferPool = exchange.getConnection().getByteBufferPool();
@@ -167,10 +179,10 @@ class UndertowServerHttpRequest extends AbstractServerHttpRequest {
 			boolean release = true;
 			try {
 				ByteBuffer byteBuffer = pooledByteBuffer.getBuffer();
-
 				int read = this.channel.read(byteBuffer);
-				if (logger.isTraceEnabled()) {
-					logger.trace("Channel read returned " + read + (read != -1 ? " bytes" : ""));
+
+				if (rsReadLogger.isTraceEnabled()) {
+					rsReadLogger.trace(getLogPrefix() + "Read " + read + (read != -1 ? " bytes" : ""));
 				}
 
 				if (read > 0) {
@@ -183,7 +195,8 @@ class UndertowServerHttpRequest extends AbstractServerHttpRequest {
 					onAllDataRead();
 				}
 				return null;
-			} finally {
+			}
+			finally {
 				if (release && pooledByteBuffer.isOpen()) {
 					pooledByteBuffer.close();
 				}
@@ -210,8 +223,14 @@ class UndertowServerHttpRequest extends AbstractServerHttpRequest {
 
 		@Override
 		public boolean release() {
-			this.pooledByteBuffer.close();
-			return this.pooledByteBuffer.isOpen();
+			boolean result;
+			try {
+				result = DataBufferUtils.release(this.dataBuffer);
+			}
+			finally {
+				this.pooledByteBuffer.close();
+			}
+			return result && this.pooledByteBuffer.isOpen();
 		}
 
 		@Override
@@ -267,6 +286,11 @@ class UndertowServerHttpRequest extends AbstractServerHttpRequest {
 		@Override
 		public DataBuffer capacity(int newCapacity) {
 			return this.dataBuffer.capacity(newCapacity);
+		}
+
+		@Override
+		public byte getByte(int index) {
+			return this.dataBuffer.getByte(index);
 		}
 
 		@Override
@@ -331,6 +355,11 @@ class UndertowServerHttpRequest extends AbstractServerHttpRequest {
 		@Override
 		public InputStream asInputStream() {
 			return this.dataBuffer.asInputStream();
+		}
+
+		@Override
+		public InputStream asInputStream(boolean releaseOnClose) {
+			return this.dataBuffer.asInputStream(releaseOnClose);
 		}
 
 		@Override

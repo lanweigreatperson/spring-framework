@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2017 the original author or authors.
+ * Copyright 2002-2018 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,9 @@
 
 package org.springframework.web.reactive.function.server;
 
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -28,9 +31,11 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseCookie;
 import org.springframework.mock.http.server.reactive.test.MockServerHttpRequest;
+import org.springframework.mock.http.server.reactive.test.MockServerHttpResponse;
 import org.springframework.mock.web.test.server.MockServerWebExchange;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
@@ -40,7 +45,7 @@ import org.springframework.web.reactive.result.view.ViewResolver;
 import org.springframework.web.reactive.result.view.ViewResolverSupport;
 import org.springframework.web.server.ServerWebExchange;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -49,7 +54,7 @@ import static org.mockito.Mockito.*;
 public class DefaultRenderingResponseTests {
 
 	@Test
-	public void create() throws Exception {
+	public void create() {
 		String name = "foo";
 		Mono<RenderingResponse> result = RenderingResponse.create(name).build();
 		StepVerifier.create(result)
@@ -59,7 +64,7 @@ public class DefaultRenderingResponseTests {
 	}
 
 	@Test
-	public void headers() throws Exception {
+	public void headers() {
 		HttpHeaders headers = new HttpHeaders();
 		Mono<RenderingResponse> result = RenderingResponse.create("foo").headers(headers).build();
 		StepVerifier.create(result)
@@ -70,7 +75,7 @@ public class DefaultRenderingResponseTests {
 	}
 
 	@Test
-	public void modelAttribute() throws Exception {
+	public void modelAttribute() {
 		Mono<RenderingResponse> result = RenderingResponse.create("foo")
 				.modelAttribute("foo", "bar").build();
 		StepVerifier.create(result)
@@ -80,7 +85,7 @@ public class DefaultRenderingResponseTests {
 	}
 
 	@Test
-	public void modelAttributeConventions() throws Exception {
+	public void modelAttributeConventions() {
 		Mono<RenderingResponse> result = RenderingResponse.create("foo")
 				.modelAttribute("bar").build();
 		StepVerifier.create(result)
@@ -90,7 +95,7 @@ public class DefaultRenderingResponseTests {
 	}
 
 	@Test
-	public void modelAttributes() throws Exception {
+	public void modelAttributes() {
 		Map<String, String> model = Collections.singletonMap("foo", "bar");
 		Mono<RenderingResponse> result = RenderingResponse.create("foo")
 				.modelAttributes(model).build();
@@ -101,7 +106,7 @@ public class DefaultRenderingResponseTests {
 	}
 
 	@Test
-	public void modelAttributesConventions() throws Exception {
+	public void modelAttributesConventions() {
 		Set<String> model = Collections.singleton("bar");
 		Mono<RenderingResponse> result = RenderingResponse.create("foo")
 				.modelAttributes(model).build();
@@ -112,7 +117,7 @@ public class DefaultRenderingResponseTests {
 	}
 
 	@Test
-	public void cookies() throws Exception {
+	public void cookies() {
 		MultiValueMap<String, ResponseCookie> newCookies = new LinkedMultiValueMap<>();
 		newCookies.add("name", ResponseCookie.from("name", "value").build());
 		Mono<RenderingResponse> result =
@@ -125,7 +130,7 @@ public class DefaultRenderingResponseTests {
 
 
 	@Test
-	public void render() throws Exception {
+	public void render() {
 		Map<String, Object> model = Collections.singletonMap("foo", "bar");
 		Mono<RenderingResponse> result = RenderingResponse.create("view").modelAttributes(model).build();
 
@@ -149,7 +154,7 @@ public class DefaultRenderingResponseTests {
 	}
 
 	@Test
-	public void defaultContentType() throws Exception {
+	public void defaultContentType() {
 		Mono<RenderingResponse> result = RenderingResponse.create("view").build();
 
 		MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("http://localhost"));
@@ -180,5 +185,53 @@ public class DefaultRenderingResponseTests {
 		}
 
 	}
+
+	@Test
+	public void notModifiedEtag() {
+		String etag = "\"foo\"";
+		RenderingResponse responseMono = RenderingResponse.create("bar")
+				.header(HttpHeaders.ETAG, etag)
+				.build()
+				.block();
+
+		MockServerHttpRequest request = MockServerHttpRequest.get("http://example.com")
+				.header(HttpHeaders.IF_NONE_MATCH, etag)
+				.build();
+		MockServerWebExchange exchange = MockServerWebExchange.from(request);
+
+		responseMono.writeTo(exchange, DefaultServerResponseBuilderTests.EMPTY_CONTEXT);
+
+		MockServerHttpResponse response = exchange.getResponse();
+		assertEquals(HttpStatus.NOT_MODIFIED, response.getStatusCode());
+		StepVerifier.create(response.getBody())
+				.expectError(IllegalStateException.class)
+				.verify();
+	}
+
+	@Test
+	public void notModifiedLastModified() {
+		ZonedDateTime now = ZonedDateTime.now();
+		ZonedDateTime oneMinuteBeforeNow = now.minus(1, ChronoUnit.MINUTES);
+
+		RenderingResponse responseMono = RenderingResponse.create("bar")
+				.header(HttpHeaders.LAST_MODIFIED, DateTimeFormatter.RFC_1123_DATE_TIME.format(oneMinuteBeforeNow))
+				.build()
+				.block();
+
+		MockServerHttpRequest request = MockServerHttpRequest.get("http://example.com")
+				.header(HttpHeaders.IF_MODIFIED_SINCE,
+						DateTimeFormatter.RFC_1123_DATE_TIME.format(now))
+				.build();
+		MockServerWebExchange exchange = MockServerWebExchange.from(request);
+
+		responseMono.writeTo(exchange, DefaultServerResponseBuilderTests.EMPTY_CONTEXT);
+
+		MockServerHttpResponse response = exchange.getResponse();
+		assertEquals(HttpStatus.NOT_MODIFIED, response.getStatusCode());
+		StepVerifier.create(response.getBody())
+				.expectError(IllegalStateException.class)
+				.verify();
+	}
+
 
 }
